@@ -1,7 +1,8 @@
 import os
 import openai
 import requests
-from fastapi import FastAPI, HTTPException
+import time
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from loguru import logger
 
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
-USER_AGENT = "AcademicCVGenerator/0.1 (DTU course project)"
+USER_AGENT = "AcademicCVGenerator"
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "lmstudio")
 
 if LLM_PROVIDER == "lmstudio":
@@ -81,81 +82,129 @@ def simple_call_llm(instructions: str, input: str):
         instructions=instructions,
         input=input,
     )
-
     return response.output_text
 
-
-def get_researcher_data(qid):
-    query = f"""
-    SELECT ?name ?orcid ?eduLabel ?awardLabel ?pubLabel WHERE {{
-      BIND(wd:{qid} AS ?person)
-      ?person rdfs:label ?name. FILTER(LANG(?name) = "en")
-
-      OPTIONAL {{ ?person wdt:P496 ?orcid. }}
-      
-      OPTIONAL {{
-        ?person wdt:P69 ?edu.
-        ?edu rdfs:label ?eduLabel. FILTER(LANG(?eduLabel) = "en")
-      }}
-      
-      OPTIONAL {{
-        ?person wdt:P166 ?award.
-        ?award rdfs:label ?awardLabel. FILTER(LANG(?awardLabel) = "en")
-      }}
-
-      OPTIONAL {{
-        ?pub wdt:P50 ?person.
-        ?pub rdfs:label ?pubLabel. FILTER(LANG(?pubLabel) = "en")
-      }}
-    }}
-    """
-    headers = {
-        'User-Agent': 'AcademicCVGenerator',
-        'Accept': 'application/json'
-    }
-
-    resp = requests.get(
-        WIKIDATA_SPARQL_URL, 
-        params={'query': query, 'format': 'json'},
-        headers=headers
-    )
-
+def execute_sparql(query: str):
+    headers = {'User-Agent': USER_AGENT, 'Accept': 'application/json'}
+    resp = requests.get(WIKIDATA_SPARQL_URL, params={'query': query, 'format': 'json'}, headers=headers)
     if resp.status_code != 200:
-        print(f"Error from Wikidata: {resp.status_code}")
-        print(resp.text) # This will show you the HTML error causing the crash
-        return None
+        logger.error(f"Wikidata error: {resp.status_code}")
+        return []
+    return resp.json().get('results', {}).get('bindings', [])
 
-    response = resp.json()
+def format_for_llm(raw_sparql: dict) -> dict:
+    cleaned_data = {"name": raw_sparql.get("name", "Unknown")}
     
-    bindings = response.get('results', {}).get('bindings', [])
-    
-    if not bindings:
-        return None
+    for section, items in raw_sparql.items():
+        if section == "name":
+            continue
+            
+        cleaned_list = []
+        for item in items:
+            clean_item = {}
+            for key, data_dict in item.items():
+                value = data_dict.get("value", "")
+                
+                if value.startswith("http://www.wikidata.org/entity/"):
+                    continue
+                
+                if "T00:00:00Z" in value:
+                    value = value.replace("T00:00:00Z", "")
+                    
+                clean_item[key] = value
+            
+            if clean_item and clean_item not in cleaned_list:
+                cleaned_list.append(clean_item)
+                
+        cleaned_data[section] = cleaned_list
+        
+    return cleaned_data
 
-    cv_data = {
-        "name": bindings[0].get("name", {}).get("value"),
-        "orcid": bindings[0].get("orcid", {}).get("value"),
-        "education": set(),
-        "awards": set(),
-        "publications": set()
+def get_researcher_data(qid: str):
+    queries = {
+        "education": f"""
+            SELECT ?name ?educationLabel ?degreeLabel ?eduStart ?eduEnd WHERE {{
+            BIND(wd:{qid} AS ?researcher)
+            ?researcher rdfs:label ?name . FILTER(LANG(?name) = "en")
+            ?researcher p:P69 ?eduStatement . ?eduStatement ps:P69 ?education .
+            OPTIONAL {{ ?eduStatement pq:P512 ?degree . }}
+            OPTIONAL {{ ?eduStatement pq:P580 ?eduStart . }}
+            OPTIONAL {{ ?eduStatement pq:P582 ?eduEnd . }}
+            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+            }} ORDER BY DESC(?eduEnd) DESC(?eduStart)
+        """,
+        "employment": f"""
+            SELECT ?name ?employerLabel ?roleLabel ?empStart ?empEnd WHERE {{
+            BIND(wd:{qid} AS ?researcher)
+            ?researcher rdfs:label ?name . FILTER(LANG(?name) = "en")
+            ?researcher p:P108 ?empStatement . ?empStatement ps:P108 ?employer .
+            OPTIONAL {{ ?empStatement pq:P39 ?role . }}
+            OPTIONAL {{ ?empStatement pq:P580 ?empStart . }}
+            OPTIONAL {{ ?empStatement pq:P582 ?empEnd . }}
+            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+            }} ORDER BY DESC(?empStart)
+        """,
+        "awards": f"""
+            SELECT ?name ?awardLabel ?awardDate WHERE {{
+            BIND(wd:{qid} AS ?researcher)
+            ?researcher rdfs:label ?name . FILTER(LANG(?name) = "en")
+            ?researcher p:P166 ?awardStatement . ?awardStatement ps:P166 ?award .
+            OPTIONAL {{ ?awardStatement pq:P585 ?awardDate . }}
+            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+            }} ORDER BY DESC(?awardDate)
+        """,
+        "supervision": f"""
+            SELECT ?role ?personLabel WHERE {{
+            BIND(wd:{qid} AS ?researcher)
+            {{ ?researcher wdt:P185 ?person . BIND("Supervised Student" AS ?role) }}
+            UNION
+            {{ ?researcher wdt:P184 ?person . BIND("Academic Advisor" AS ?role) }}
+            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+            }}
+        """,
+        "collaborations": f"""
+            SELECT DISTINCT ?coauthorLabel WHERE {{
+            BIND(wd:{qid} AS ?researcher)
+            ?work wdt:P50 ?researcher .
+            ?work wdt:P50 ?coauthor .
+            FILTER(?coauthor != ?researcher)
+            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+            }} LIMIT 50
+        """,
+        "track_record": f"""
+            SELECT DISTINCT ?workLabel ?date WHERE {{
+            BIND(wd:{qid} AS ?researcher)
+            ?work wdt:P50 ?researcher .
+            OPTIONAL {{ ?work wdt:P577 ?date . }}
+            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+            }} ORDER BY DESC(?date) LIMIT 50
+        """
     }
 
-    for row in bindings:
-        if "eduLabel" in row:
-            cv_data["education"].add(row["eduLabel"]["value"])
-        if "awardLabel" in row:
-            cv_data["awards"].add(row["awardLabel"]["value"])
-        if "pubLabel" in row:
-            cv_data["publications"].add(row["pubLabel"]["value"])
+    logger.info(f"Querying wikidata for QID: {qid}")
+    results = {}
+    for key, q in queries.items():
+        results[key] = execute_sparql(q)
+        logger.info(f"Fetched {len(results[key])} results for {key}")
+        time.sleep(1)
+    
+    name = "Unknown"
+    for res in results.values():
+        if res and "name" in res[0]:
+            name = res[0]["name"]["value"]
+            break
 
-    return {
-        "name": cv_data["name"],
-        "orcid": cv_data["orcid"],
-        "education": sorted(list(cv_data["education"])),
-        "awards": sorted(list(cv_data["awards"])),
-        "publications": sorted(list(cv_data["publications"])),
+    raw_data = {
+        "name": name,
+        "education": results["education"],
+        "employment": results["employment"],
+        "awards": results["awards"],
+        "supervision": results["supervision"],
+        "collaborations": results["collaborations"],
+        "track_record": results["track_record"]
     }
 
+    return format_for_llm(raw_data)
 
 @app.post("/api/v1/chat")
 def chat(request: ChatRequest):
@@ -173,3 +222,54 @@ def research(wikidata_qid: str):
 @app.get("/health")
 def health() -> dict[str, str]:
 	return {"status": "ok"}
+
+@app.post("/api/v1/generate/{wikidata_qid}")
+def generate_cv(wikidata_qid: str, previous_cv: UploadFile = File(None)):
+    profile = get_researcher_data(wikidata_qid)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Researcher not found or no data available.")
+    logger.info(f"Generating CV for {profile['name']} (QID: {wikidata_qid}) with previous CV: {previous_cv.filename if previous_cv else 'None'}")
+    logger.debug(f"Wikidata profile data: {profile}")
+    
+    # TODO: Extract text from uploaded PDF
+    previous_cv_text = ""
+    if previous_cv:
+        pass
+
+    system_instruction = """You are an expert academic consultant specializing in the Independent Research Fund Denmark (DFF) 2026 call. 
+    Your task is to draft a narrative CV following the CoARA principles and DFF B20/B21 templates.
+    Strict Constraints:
+    1. Do NOT include H-index, Impact Factors, or other bibliometrics (only citations allowed).
+    2. Focus on narrative descriptions of impact, scientific quality, and leadership.
+    3. Format into mandatory categories: Research Statement, Career, Grants/Awards, Supervision & Leadership, Community Contributions, and a B21 Track Record (last 10 years)."""
+
+    user_prompt = f"""
+    Draft a DFF 2026 narrative CV using this Wikidata profile:
+    
+    Name: {profile['name']}
+    Date of Birth: {profile['dob']}
+    Employers: {', '.join(profile['employers'])}
+    Education: {', '.join(profile['education'])}
+    Awards: {', '.join(profile['awards'])}
+    Mentored Students: {', '.join(profile['students'])}
+    Memberships: {', '.join(profile['memberships'])}
+    
+    Publications (Past 10 Years):
+    {chr(10).join('- ' + p for p in profile['publications'])}
+    """
+
+    # TODO: If previous_cv_text is available, include it in the prompt to guide the LLM in improving the existing CV draft.
+    if previous_cv_text:
+        user_prompt += f"\n\nAdditionally, incorporate relevant narrative details from the applicant's previous CV:\n{previous_cv_text}"
+
+    messages = [
+        ChatMessage(role="system", content=system_instruction),
+        ChatMessage(role="user", content=user_prompt)
+    ]
+
+    cv_text = call_llm(messages)
+    
+    return {
+        "cv_draft": cv_text,
+        "raw_data": profile
+    }
