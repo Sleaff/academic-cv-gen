@@ -2,25 +2,33 @@ import os
 import openai
 import requests
 import time
+import json
+import docx
+import io
+from fpdf import FPDF
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
+from docx.shared import Pt, Cm
 
 from dotenv import load_dotenv
 load_dotenv()
 
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 USER_AGENT = "AcademicCVGenerator"
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "lmstudio")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "campusai")
 
-if LLM_PROVIDER == "lmstudio":
+if LLM_PROVIDER == "campusai":
+    LLM_BASE_URL = os.getenv("CAMPUSAI_BASE_URL", "https://api.campusai.compute.dtu.dk/v1")
+    LLM_MODEL = os.getenv("CAMPUSAI_MODEL", "Gemma 4")
+    LLM_API_KEY = os.getenv("CAMPUSAI_API_KEY", "your-campusai-key")
+    logger.info("Using CampusAI as LLM provider")
+else:
     LLM_BASE_URL = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
     LLM_MODEL = os.getenv("LMSTUDIO_MODEL", "google/gemma-4-26b-a4b")
     LLM_API_KEY = os.getenv("LMSTUDIO_API_KEY", "lm-studio")
-else:
-    LLM_BASE_URL = os.getenv("CAMPUSAI_BASE_URL", "https://chat.campusai.compute.dtu.dk/api")
-    LLM_MODEL = os.getenv("CAMPUSAI_MODEL", "Gemma 4")
-    LLM_API_KEY = os.getenv("CAMPUSAI_API_KEY", "your-campusai-key")
+    logger.info("Using LM Studio as LLM provider")
 
 
 app = FastAPI(
@@ -57,14 +65,16 @@ def get_llm_client() -> openai.OpenAI:
         base_url=LLM_BASE_URL,
     )
 
-
 def call_llm(messages: list[ChatMessage]) -> str:
     client = get_llm_client()
 
-    completion = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[message.model_dump() for message in messages],
-    )
+    try:
+        completion = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[message.model_dump() for message in messages],
+        )
+    except openai.AuthenticationError as exc:
+        raise HTTPException(status_code=502, detail="LLM authentication failed. Check provider and API key configuration.") from exc
 
     if not completion.choices:
         raise HTTPException(status_code=502, detail="LLM response did not include any choices")
@@ -77,20 +87,44 @@ def call_llm(messages: list[ChatMessage]) -> str:
 
 def simple_call_llm(instructions: str, input: str):
     client = get_llm_client()
-    response = client.responses.create(
-        model=LLM_MODEL,
-        instructions=instructions,
-        input=input,
-    )
+    try:
+        response = client.responses.create(
+            model=LLM_MODEL,
+            instructions=instructions,
+            input=input,
+        )
+    except openai.AuthenticationError as exc:
+        raise HTTPException(status_code=502, detail="LLM authentication failed. Check provider and API key configuration.") from exc
+
     return response.output_text
 
-def execute_sparql(query: str):
-    headers = {'User-Agent': USER_AGENT, 'Accept': 'application/json'}
-    resp = requests.get(WIKIDATA_SPARQL_URL, params={'query': query, 'format': 'json'}, headers=headers)
-    if resp.status_code != 200:
-        logger.error(f"Wikidata error: {resp.status_code}")
-        return []
-    return resp.json().get('results', {}).get('bindings', [])
+def execute_sparql(query, max_retries=3):
+    """Executes a SPARQL query against Wikidata with automatic retries."""
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "AcademicCVGenerator (s195171@student.dtu.dk)" 
+    }
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(WIKIDATA_SPARQL_URL, params={'query': query}, headers=headers)
+            
+            if response.status_code in [429, 500, 502, 503, 504]:
+                wait_time = 5 * (attempt + 1)
+                logger.warning(f"Wikidata error {response.status_code}. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+                
+            response.raise_for_status() 
+            
+            return response.json().get('results', {}).get('bindings', [])
+            
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Network error: {e}. Retrying...")
+            time.sleep(5)
+            
+    logger.error("Max retries reached. Returning empty list to prevent crash.")
+    return []
 
 def format_for_llm(raw_sparql: dict) -> dict:
     cleaned_data = {"name": raw_sparql.get("name", "Unknown")}
@@ -186,7 +220,7 @@ def get_researcher_data(qid: str):
     for key, q in queries.items():
         results[key] = execute_sparql(q)
         logger.info(f"Fetched {len(results[key])} results for {key}")
-        time.sleep(1)
+        time.sleep(3) # avoid hitting rate limits on wikidata
     
     name = "Unknown"
     for res in results.values():
@@ -206,6 +240,14 @@ def get_researcher_data(qid: str):
 
     return format_for_llm(raw_data)
 
+def get_template_instructions(filepath: str) -> str:
+    """Reads the raw text from the Word template to feed to the LLM."""
+    try:
+        doc = docx.Document(filepath)
+        return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    except Exception:
+        return ""
+
 @app.post("/api/v1/chat")
 def chat(request: ChatRequest):
     return {"response": call_llm(request.messages)}
@@ -224,39 +266,75 @@ def health() -> dict[str, str]:
 	return {"status": "ok"}
 
 @app.post("/api/v1/generate/{wikidata_qid}")
-def generate_cv(wikidata_qid: str, previous_cv: UploadFile = File(None)):
-    profile = get_researcher_data(wikidata_qid)
+def generate_cv(wikidata_qid: str, format: str = "docx", previous_cv: UploadFile = File(None)):
+    if wikidata_qid == "Q20980928":
+        profile = json.load(open("research_Q20980928_results.json", "r"))
+    else:
+        profile = get_researcher_data(wikidata_qid)
+    
     if not profile:
         raise HTTPException(status_code=404, detail="Researcher not found or no data available.")
     logger.info(f"Generating CV for {profile['name']} (QID: {wikidata_qid}) with previous CV: {previous_cv.filename if previous_cv else 'None'}")
-    logger.debug(f"Wikidata profile data: {profile}")
+    # logger.debug(f"Wikidata profile data: {profile}")
     
     # TODO: Extract text from uploaded PDF
     previous_cv_text = ""
     if previous_cv:
         pass
 
-    system_instruction = """You are an expert academic consultant specializing in the Independent Research Fund Denmark (DFF) 2026 call. 
-    Your task is to draft a narrative CV following the CoARA principles and DFF B20/B21 templates.
-    Strict Constraints:
-    1. Do NOT include H-index, Impact Factors, or other bibliometrics (only citations allowed).
-    2. Focus on narrative descriptions of impact, scientific quality, and leadership.
-    3. Format into mandatory categories: Research Statement, Career, Grants/Awards, Supervision & Leadership, Community Contributions, and a B21 Track Record (last 10 years)."""
+    template_instructions = get_template_instructions("dff-cv-template.docx")
 
+    format_instructions = {
+        "markdown": "Format the output using standard Markdown (## headers, **bold**, *italics*, bullet points).",
+        "latex": "Format the output as a COMPLETE, compilable LaTeX document using the \\documentclass{article} class. Do not use markdown.",
+        "docx": "Format the output clearly as plain text for a docx file. Headers can be marked with #.",
+        "pdf": "Format the output clearly as plain text for a pdf file. Headers can be marked with #."
+    }
+
+    selected_instruction = format_instructions.get(format.lower(), format_instructions[f"{format}"])
+
+    # system_instruction = f"""You are an expert academic consultant specializing in the Independent Research Fund Denmark (DFF) 2026 call. 
+    # Your task is to draft a narrative CV following the CoARA principles and DFF template
+    # Strict Constraints:
+    # 1. Do NOT include H-index, Impact Factors, or other bibliometrics (only citations allowed).
+    # 2. {selected_instruction}
+    # """
+    system_instruction = f"""You are an expert consultant for the DFF 2026 call. 
+    Draft a CV that includes these EXACT headers:
+    1. CV (as a title)
+    2. Family name, First name(s)
+    3. Current position(s)
+    4. Previous positions
+    5. Education
+    6. Career breaks
+    7. Research statement
+    8. Personal context
+    9. Grants and awards
+    10. Supervision, teaching and research leadership
+    11. Collaborations and teamwork
+    12. Contributions to the research community
+    13. Contributions to the wider society
+
+    Constraints: No links, no h-index, 12pt font style content, the final document should be max 3 pages. {selected_instruction}"""
+    # 2. You MUST format the output as a valid JSON object using these exact keys: "name", "current_positions", "previous_positions", "education", "career_breaks", "research_statement", "personal_context", "grants_and_awards", "supervision_leadership", "collaborations_teamwork", "contributions_community", "contributions_society".
+    
     user_prompt = f"""
     Draft a DFF 2026 narrative CV using this Wikidata profile:
     
-    Name: {profile['name']}
-    Date of Birth: {profile['dob']}
-    Employers: {', '.join(profile['employers'])}
-    Education: {', '.join(profile['education'])}
-    Awards: {', '.join(profile['awards'])}
-    Mentored Students: {', '.join(profile['students'])}
-    Memberships: {', '.join(profile['memberships'])}
-    
-    Publications (Past 10 Years):
-    {chr(10).join('- ' + p for p in profile['publications'])}
+    Name: {profile.get('name', '')}
+    Education: {json.dumps(profile.get('education', []), indent=2)}
+    Employment: {json.dumps(profile.get('employment', []), indent=2)}
+    Awards: {json.dumps(profile.get('awards', []), indent=2)}
+    Supervision: {json.dumps(profile.get('supervision', []), indent=2)}
+    Collaborations: {json.dumps(profile.get('collaborations', []), indent=2)}
+    Track Record: {json.dumps(profile.get('track_record', []), indent=2)}
+
+    Here is the official DFF CV Template and its instructions. Read the bracketed text carefully (e.g., length limits) and write the content for each section accordingly:
+    {template_instructions}
     """
+
+    # Publications (Past 10 Years):
+    # {chr(10).join('- ' + p for p in profile['publications'])}
 
     # TODO: If previous_cv_text is available, include it in the prompt to guide the LLM in improving the existing CV draft.
     if previous_cv_text:
@@ -267,9 +345,95 @@ def generate_cv(wikidata_qid: str, previous_cv: UploadFile = File(None)):
         ChatMessage(role="user", content=user_prompt)
     ]
 
-    cv_text = call_llm(messages)
+    llm_text = call_llm(messages)
+
+    file_stream = io.BytesIO()
+    filename = f"DFF_CV_{profile.get('name', 'Draft').replace(' ', '_')}"
+
+    if format == "markdown":
+        file_stream.write(llm_text.encode('utf-8'))
+        media_type = "text/markdown"
+        filename += ".md"
+
+    elif format == "latex":
+        file_stream.write(llm_text.encode('utf-8'))
+        media_type = "application/x-tex"
+        filename += ".tex"
+
+    elif format == "docx":
+        doc = docx.Document()
+        
+        for section in doc.sections:
+            section.top_margin = Cm(2)
+            section.bottom_margin = Cm(2)
+            section.left_margin = Cm(2)
+            section.right_margin = Cm(2)
+            
+        style = doc.styles['Normal']
+        font = style.font
+        font.name = 'Times New Roman'
+        font.size = Pt(12)
+        style.paragraph_format.line_spacing = 1.5
+
+        for line in llm_text.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check if the line starts with a '#' to signify a header
+            if line.startswith('#'):
+                clean_header = line.lstrip('#').strip()
+                p = doc.add_heading(clean_header, level=3)
+            else:
+                doc.add_paragraph(line)
+            
+        doc.save(file_stream)
+        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        filename += ".docx"
+
+    elif format == "pdf":
+        pdf = FPDF()
+        pdf.set_margins(left=20, top=20, right=20)
+        pdf.add_page()
+        
+        for line in llm_text.split('\n'):
+            line = line.strip()
+            if not line:
+                pdf.ln(5)
+                continue
+                
+            # Check for header symbol
+            if line.startswith('#'):
+                clean_header = line.lstrip('#').strip()
+                safe_line = clean_header.encode('latin-1', 'replace').decode('latin-1')
+                
+                pdf.set_font("Times", 'B', size=14)
+                pdf.multi_cell(0, 10, txt=safe_line)
+                
+                pdf.set_font("Times", size=12)
+            else:
+                safe_line = line.encode('latin-1', 'replace').decode('latin-1')
+                pdf.multi_cell(0, 7, txt=safe_line)
+        
+        pdf_bytes = pdf.output(dest='S')
+        if isinstance(pdf_bytes, str):
+            pdf_bytes = pdf_bytes.encode('latin-1')
+            
+        file_stream.write(pdf_bytes)
+        media_type = "application/pdf"
+        filename += ".pdf"
+
+    else:
+        raise HTTPException(status_code=400, detail="Invalid format requested.")
+
+    file_stream.seek(0)
+    return StreamingResponse(
+        file_stream, 
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
     
-    return {
-        "cv_draft": cv_text,
-        "raw_data": profile
-    }
+    # return {
+    #     "cv_draft": cv_text,
+    #     "raw_data": profile
+    # }

@@ -1,0 +1,161 @@
+{
+  "name": "Finn Årup Nielsen",
+  "education": [
+    {
+      "name": "Finn Årup Nielsen",
+      "educationLabel": "Technical University of Denmark",
+      "degreeLabel": "Danish PhD",
+      "eduStart": "1998-01-01",
+      "eduEnd": "2001-01-01"
+    },
+    {
+      "name": "Finn Årup Nielsen",
+      "educationLabel": "Technical University of Denmark",
+      "degreeLabel": "Master of Engineering",
+      "eduStart": "1993-01-01",
+      "eduEnd": "1996-01-01"
+    },
+    {
+      "name": "Finn Årup Nielsen",
+      "educationLabel": "Aarhus University School of Engineering",
+      "eduStart": "1990-01-01",
+      "eduEnd": "1993-01-01"
+    }
+  ],
+  "employment": [
+    {
+      "name": "Finn Årup Nielsen",
+      "employerLabel": "Technical University of Denmark",
+      "empStart": "2006-01-01"
+    },
+    {
+      "name": "Finn Årup Nielsen",
+      "employerLabel": "Rigshospitalet",
+      "empStart": "2004-03-01",
+      "empEnd": "2005-12-31"
+    },
+    {
+      "name": "Finn Årup Nielsen",
+      "employerLabel": "Technical University of Denmark",
+      "empStart": "1996-04-01",
+      "empEnd": "2004-02-29"
+    }
+  ],
+  "awards": [
+    {
+      "name": "Finn Årup Nielsen",
+      "awardLabel": "Jorck's Prize",
+      "awardDate": "2007-01-01"
+    }
+  ],
+  "supervision": [
+    {
+      "role": "Supervised Student",
+      "personLabel": "Laura Rieger"
+    },
+    {
+      "role": "Academic Advisor",
+      "personLabel": "Lars Kai Hansen"
+    },
+    {
+      "role": "Academic Advisor",
+      "personLabel": "Jan Larsen"
+    }
+  ],
+  "collaborations": [
+    {
+      "coauthorLabel": "Adélie Ranville"
+    },
+    {
+      "coauthorLabel": "Andra Waagmeester"
+    },
+    {
+      "coauthorLabel": "Daniel Mietchen"
+    },
+    {
+      "coauthorLabel": "Egon Willighagen"
+    },
+    {
+      "coauthorLabel": "Claus Svarer"
+    },
+    {
+      "coauthorLabel": "Lars Kai Hansen"
+    },
+    {
+      "coauthorLabel": "Dario Taraborelli"
+    },
+    {
+      "coauthorLabel": "Najko Jahn"
+    },
+    {
+      "coauthorLabel": "Gitte Moos Knudsen"
+    },
+    {
+      "coauthorLabel": "Rémy Gerbet"
+    },
+    {
+      "coauthorLabel": "Dariusz Jemielniak"
+    },
+    {
+      "coauthorLabel": "Arthur Perret"
+    }
+  ],
+  "track_record": [
+    {
+      "workLabel": "Developing a wiki-integrated workflow to build a living review on just sustainability transitions",
+      "date": "2025-05-03"
+    },
+    {
+      "workLabel": "Games for the lexemes in Wikidata",
+      "date": "2025-03-18"
+    },
+    {
+      "workLabel": "Synia: Displaying data from Wikibases",
+      "date": "2023-03-27"
+    },
+    {
+      "workLabel": "Wikidata og Scholia: Det redigerbare Linked Open Data med bibliografiske data",
+      "date": "2022-09-02"
+    },
+    {
+      "workLabel": "Creating Semantic Representations",
+      "date": "2020-06-09"
+    },
+    {
+      "workLabel": "Software for Creating and Analyzing Semantic Representations",
+      "date": "2020-06-09"
+    },
+    {
+      "workLabel": "The EU NanoSafety Cluster as Linked Data visualized with Scholia",
+      "date": "2018-07-02"
+    },
+    {
+      "workLabel": "WikiCite: Citations needed for the sum of all human knowledge",
+      "date": "2017-08-12"
+    },
+    {
+      "workLabel": "Scholia - March 2017",
+      "date": "2017-03-13"
+    },
+    {
+      "workLabel": "Sequential collaboration network with sentiment coloring",
+      "date": "2013-01-01"
+    },
+    {
+      "workLabel": "Meta-analytic clustering of molecular neuroimaging studies",
+      "date": "2004-01-01"
+    },
+    {
+      "workLabel": "The Brede database: A small database for functional neuroimaging",
+      "date": "2003-01-01"
+    },
+    {
+      "workLabel": "Automatic anatomical labeling of Talairach coordinates and generation of volumes of interest via the BrainMap database",
+      "date": "2002-06-01"
+    },
+    {
+      "workLabel": "Author cocitation analysis of articles from “Neurolmage”",
+      "date": "2001-06-01"
+    }
+  ]
+}
