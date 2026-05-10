@@ -182,68 +182,94 @@ def get_researcher_data(qid: str):
     queries = {
         "education": f"""
             SELECT ?name ?educationLabel ?degreeLabel ?eduStart ?eduEnd WHERE {{
-            BIND(wd:{qid} AS ?researcher)
-            ?researcher rdfs:label ?name . FILTER(LANG(?name) = "en")
-            ?researcher p:P69 ?eduStatement . ?eduStatement ps:P69 ?education .
-            OPTIONAL {{ ?eduStatement pq:P512 ?degree . }}
-            OPTIONAL {{ ?eduStatement pq:P580 ?eduStart . }}
-            OPTIONAL {{ ?eduStatement pq:P582 ?eduEnd . }}
-            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
-            }} ORDER BY DESC(?eduEnd) DESC(?eduStart)
+                BIND(wd:{qid} AS ?researcher)
+                OPTIONAL {{ 
+                    ?researcher rdfs:label ?name . 
+                    FILTER(LANG(?name) = "en") 
+                }}
+                ?researcher p:P69 ?eduStatement .
+                ?eduStatement ps:P69 ?education .
+                OPTIONAL {{ ?eduStatement pq:P512 ?degree . }}
+                OPTIONAL {{ ?eduStatement pq:P580 ?eduStart . }}
+                OPTIONAL {{ ?eduStatement pq:P582 ?eduEnd . }}
+                SERVICE wikibase:label {{ 
+                    bd:serviceParam wikibase:language "en". 
+                    ?education rdfs:label ?educationLabel .
+                    ?degree rdfs:label ?degreeLabel .
+                }}
+            }}
         """,
         "employment": f"""
-            SELECT ?name ?employerLabel ?roleLabel ?empStart ?empEnd WHERE {{
-            BIND(wd:{qid} AS ?researcher)
-            ?researcher rdfs:label ?name . FILTER(LANG(?name) = "en")
-            ?researcher p:P108 ?empStatement . ?empStatement ps:P108 ?employer .
-            OPTIONAL {{ ?empStatement pq:P39 ?role . }}
-            OPTIONAL {{ ?empStatement pq:P580 ?empStart . }}
-            OPTIONAL {{ ?empStatement pq:P582 ?empEnd . }}
-            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
-            }} ORDER BY DESC(?empStart)
+            SELECT ?employerLabel ?roleLabel ?empStart ?empEnd WHERE {{
+                BIND(wd:{qid} AS ?researcher)
+                ?researcher p:P108 ?empStatement .
+                ?empStatement ps:P108 ?employer .
+                OPTIONAL {{ ?empStatement pq:P39 ?role . }}
+                OPTIONAL {{ ?empStatement pq:P580 ?empStart . }}
+                OPTIONAL {{ ?empStatement pq:P582 ?empEnd . }}
+                SERVICE wikibase:label {{ 
+                    bd:serviceParam wikibase:language "en". 
+                    ?employer rdfs:label ?employerLabel .
+                    ?role rdfs:label ?roleLabel .
+                }}
+            }}
         """,
         "awards": f"""
-            SELECT ?name ?awardLabel ?awardDate WHERE {{
-            BIND(wd:{qid} AS ?researcher)
-            ?researcher rdfs:label ?name . FILTER(LANG(?name) = "en")
-            ?researcher p:P166 ?awardStatement . ?awardStatement ps:P166 ?award .
-            OPTIONAL {{ ?awardStatement pq:P585 ?awardDate . }}
-            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
-            }} ORDER BY DESC(?awardDate)
+            SELECT ?awardLabel ?awardDate WHERE {{
+                BIND(wd:{qid} AS ?researcher)
+                ?researcher p:P166 ?awardStatement .
+                ?awardStatement ps:P166 ?award .
+                OPTIONAL {{ ?awardStatement pq:P585 ?awardDate . }}
+                SERVICE wikibase:label {{ 
+                    bd:serviceParam wikibase:language "en". 
+                    ?award rdfs:label ?awardLabel .
+                }}
+            }}
         """,
         "supervision": f"""
             SELECT ?role ?personLabel WHERE {{
-            BIND(wd:{qid} AS ?researcher)
-            {{ ?researcher wdt:P185 ?person . BIND("Supervised Student" AS ?role) }}
-            UNION
-            {{ ?researcher wdt:P184 ?person . BIND("Academic Advisor" AS ?role) }}
-            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+                BIND(wd:{qid} AS ?researcher)
+                {{ ?researcher wdt:P185 ?person . BIND("Supervised Student" AS ?role) }}
+                UNION
+                {{ ?researcher wdt:P184 ?person . BIND("Academic Advisor" AS ?role) }}
+                SERVICE wikibase:label {{ 
+                    bd:serviceParam wikibase:language "en". 
+                    ?person rdfs:label ?personLabel .
+                }}
             }}
         """,
         "collaborations": f"""
             SELECT DISTINCT ?coauthorLabel WHERE {{
-            BIND(wd:{qid} AS ?researcher)
-            ?work wdt:P50 ?researcher .
-            ?work wdt:P50 ?coauthor .
-            FILTER(?coauthor != ?researcher)
-            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+                BIND(wd:{qid} AS ?researcher)
+                ?work wdt:P50 ?researcher .
+                ?work wdt:P50 ?coauthor .
+                FILTER(?coauthor != ?researcher)
+                SERVICE wikibase:label {{ 
+                    bd:serviceParam wikibase:language "en". 
+                    ?coauthor rdfs:label ?coauthorLabel .
+                }}
             }} LIMIT 50
         """,
         "track_record": f"""
             SELECT DISTINCT ?workLabel ?date WHERE {{
-            BIND(wd:{qid} AS ?researcher)
-            ?work wdt:P50 ?researcher .
-            OPTIONAL {{ ?work wdt:P577 ?date . }}
-            SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
-            }} ORDER BY DESC(?date) LIMIT 50
-        """,
+                BIND(wd:{qid} AS ?researcher)
+                ?work wdt:P50 ?researcher .
+                OPTIONAL {{ ?work wdt:P577 ?date . }}
+                SERVICE wikibase:label {{ 
+                    bd:serviceParam wikibase:language "en". 
+                    ?work rdfs:label ?workLabel .
+                }}
+            }} LIMIT 50
+        """
     }
 
     logger.info(f"Querying wikidata for QID: {qid}")
     results = {}
     for key, q in queries.items():
+        start = time.time()
         results[key] = execute_sparql(q)
-        logger.info(f"Fetched {len(results[key])} results for {key}")
+        elapsed = time.time() - start
+        logger.info(f"Fetched {len(results[key])} results for {key} in {elapsed:.2f}s")
         time.sleep(3)  # avoid hitting rate limits on wikidata
 
     name = "Unknown"
@@ -292,12 +318,15 @@ async def generate_cv(
     wikidata_qid: str, format: str = "docx", previous_cv: UploadFile = File(None)
 ):
     '''Generates a CV based on Wikidata profile and optional previous CV.'''
-    if wikidata_qid == "Q20980928" and os.path.exists(
+    start_time = time.time()
+    if wikidata_qid == "Q20980928xxx" and os.path.exists(
         "research_Q20980928_results.json"
     ):
         profile = json.load(open("research_Q20980928_results.json", "r"))
     else:
         profile = get_researcher_data(wikidata_qid)
+        time_end = time.time()
+        logger.info(f"Data Retrieval took: {time_end - start_time:.2f}s")
 
     if not profile:
         raise HTTPException(
@@ -310,6 +339,7 @@ async def generate_cv(
 
     previous_cv_text = ""
     if previous_cv:
+        time_start = time.time()
         try:
             previous_cv_text = await extract_text_from_pdf(previous_cv)
             logger.info(
@@ -321,7 +351,9 @@ async def generate_cv(
                 status_code=400,
                 detail=f"Failed to extract text from uploaded CV: {str(e)}",
             )
-
+        time_end = time.time()
+        logger.info(f"Previous CV processing took: {time_end - time_start:.2f}s")
+    
     template_instructions = get_template_instructions("dff-cv-template.docx")
 
     format_instructions = {
@@ -375,8 +407,10 @@ async def generate_cv(
         ChatMessage(role="system", content=system_instruction),
         ChatMessage(role="user", content=user_prompt),
     ]
-
+    time_start = time.time()
     llm_text = call_llm(messages)
+    time_end = time.time()
+    logger.info(f"LLM Generation took: {time_end - time_start:.2f}s")
 
     file_stream = io.BytesIO()
     filename = f"DFF_CV_{profile.get('name', 'Draft').replace(' ', '_')}"
@@ -460,6 +494,9 @@ async def generate_cv(
         raise HTTPException(status_code=400, detail="Invalid format requested.")
 
     file_stream.seek(0)
+
+    time_end = time.time()
+    logger.info(f"Total pipeline took: {time_end - start_time:.2f}s")
     return StreamingResponse(
         file_stream,
         media_type=media_type,
