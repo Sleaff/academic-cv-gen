@@ -104,8 +104,26 @@ The project will include unit tests to verify:
 4. Generate: User clicks "Generate CV," triggering the /generate endpoint.
 5. Download: The UI provides a direct download link for the final document.
 
+## How to run Docker
 
-
+## How to run locally
+### Start the Frontend
+```
+  streamlit run frontend.py
+```
+### Start the Backend
+```
+  uvicorn main:app
+```
+### Usage
+Simply open the steamlit frontend
+```
+http://localhost:8501
+```
+or use the Swagger UI for API testing
+```
+http://127.0.0.1:8000/docs
+```
 
 ## SPARQL queries
 

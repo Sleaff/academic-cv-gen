@@ -1,4 +1,5 @@
 import os
+import tempfile
 import openai
 import requests
 import time
@@ -11,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from loguru import logger
 from docx.shared import Pt, Cm
+from docling.document_converter import DocumentConverter
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -97,6 +99,33 @@ def simple_call_llm(instructions: str, input: str):
         raise HTTPException(status_code=502, detail="LLM authentication failed. Check provider and API key configuration.") from exc
 
     return response.output_text
+
+async def extract_text_from_pdf(file: UploadFile) -> str:
+    try:
+        if not file.filename.endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+        logger.info(f"Processing uploaded file: {file.filename}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+            content = await file.read()
+            temp_pdf.write(content)
+            temp_pdf_path = temp_pdf.name
+        
+        converter = DocumentConverter()
+        doc = converter.convert(temp_pdf_path).document
+
+        text = doc.export_to_markdown()
+        logger.info(f"PDF converted to markdown successfully with Docling")
+
+        os.unlink(temp_pdf_path)
+        
+        return text
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 def execute_sparql(query, max_retries=3):
     """Executes a SPARQL query against Wikidata with automatic retries."""
@@ -247,15 +276,7 @@ def get_template_instructions(filepath: str) -> str:
         return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
     except Exception:
         return ""
-
-@app.post("/api/v1/chat")
-def chat(request: ChatRequest):
-    return {"response": call_llm(request.messages)}
-
-@app.post("/api/v1/chat-simple")
-def chat_simple(request: ChatSimpleRequest):
-    return {"response": simple_call_llm(request.instructions, request.input)}
-
+    
 @app.post("/api/v1/research/{wikidata_qid}")
 def research(wikidata_qid: str):
     profile = get_researcher_data(wikidata_qid)
@@ -266,7 +287,7 @@ def health() -> dict[str, str]:
 	return {"status": "ok"}
 
 @app.post("/api/v1/generate/{wikidata_qid}")
-def generate_cv(wikidata_qid: str, format: str = "docx", previous_cv: UploadFile = File(None)):
+async def generate_cv(wikidata_qid: str, format: str = "docx", previous_cv: UploadFile = File(None)):
     if wikidata_qid == "Q20980928":
         profile = json.load(open("research_Q20980928_results.json", "r"))
     else:
@@ -277,10 +298,14 @@ def generate_cv(wikidata_qid: str, format: str = "docx", previous_cv: UploadFile
     logger.info(f"Generating CV for {profile['name']} (QID: {wikidata_qid}) with previous CV: {previous_cv.filename if previous_cv else 'None'}")
     # logger.debug(f"Wikidata profile data: {profile}")
     
-    # TODO: Extract text from uploaded PDF
     previous_cv_text = ""
     if previous_cv:
-        pass
+        try:
+            previous_cv_text = await extract_text_from_pdf(previous_cv)
+            logger.info(f"Extracted text from previous CV: {len(previous_cv_text)} characters")
+        except Exception as e:
+            logger.error(f"Error extracting text from previous CV: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to extract text from uploaded CV: {str(e)}")
 
     template_instructions = get_template_instructions("dff-cv-template.docx")
 
@@ -293,12 +318,6 @@ def generate_cv(wikidata_qid: str, format: str = "docx", previous_cv: UploadFile
 
     selected_instruction = format_instructions.get(format.lower(), format_instructions[f"{format}"])
 
-    # system_instruction = f"""You are an expert academic consultant specializing in the Independent Research Fund Denmark (DFF) 2026 call. 
-    # Your task is to draft a narrative CV following the CoARA principles and DFF template
-    # Strict Constraints:
-    # 1. Do NOT include H-index, Impact Factors, or other bibliometrics (only citations allowed).
-    # 2. {selected_instruction}
-    # """
     system_instruction = f"""You are an expert consultant for the DFF 2026 call. 
     Draft a CV that includes these EXACT headers:
     1. CV (as a title)
@@ -333,10 +352,6 @@ def generate_cv(wikidata_qid: str, format: str = "docx", previous_cv: UploadFile
     {template_instructions}
     """
 
-    # Publications (Past 10 Years):
-    # {chr(10).join('- ' + p for p in profile['publications'])}
-
-    # TODO: If previous_cv_text is available, include it in the prompt to guide the LLM in improving the existing CV draft.
     if previous_cv_text:
         user_prompt += f"\n\nAdditionally, incorporate relevant narrative details from the applicant's previous CV:\n{previous_cv_text}"
 
@@ -432,8 +447,3 @@ def generate_cv(wikidata_qid: str, format: str = "docx", previous_cv: UploadFile
         media_type=media_type,
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
-    
-    # return {
-    #     "cv_draft": cv_text,
-    #     "raw_data": profile
-    # }
