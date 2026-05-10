@@ -13,11 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Ensure the entrypoint script is executable
 RUN chmod +x entrypoint.sh
 
-# Expose both ports
 EXPOSE 8000 8501
 
-# Run the entrypoint script
 CMD ["./entrypoint.sh"]
