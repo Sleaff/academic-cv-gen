@@ -70,24 +70,14 @@ Name
 Current Position(s)
 Previous Positions
 Education
-Career Breaks: Manually input
-Research Statement: Generate draft
-Personal Context: Generate draft
-Grants and Awards: Auto
-Supervision, teaching and research leadership: Auto
-Collaborations and teamwork: Auto
+Career Breaks
+Research Statement
+Personal Context
+Grants and Awards
+Supervision, teaching and research leadership
+Collaborations and teamwork
 Contributions to the research community
 Contributions to the wider society
-
-
-Career Breaks: Document any periods of leave (maternity leave, sick leave, etc.).
-Research Satement: A narrative description of your research profile and goals.
-Personal Context: Factors that have influenced your research career.
-Grants and Awards: Noteable fonding and honors.
-Supervision, Teaching and Leadership: Evidence of your role in developing others managing projects.
-Collaboration and Teamwork: Description of your national and international networks.
-Contributions to the Research Community: Peer review, committee work, or organizing conferences.
-Contributions to the Wider Society: Dissemination, patents, or policy work. 
 
 
 ## Testing
@@ -124,75 +114,3 @@ or use the Swagger UI for API testing
 ```
 http://127.0.0.1:8000/docs
 ```
-
-## SPARQL queries
-
-### Education
-SELECT ?name ?educationLabel ?degreeLabel ?eduStart ?eduEnd
-WHERE {
-  BIND(wd:Q20980928 AS ?researcher)
-  ?researcher rdfs:label ?name .
-  FILTER(LANG(?name) = "en")
-
-  ?researcher p:P69 ?eduStatement .
-  ?eduStatement ps:P69 ?education .
-  OPTIONAL { ?eduStatement pq:P512 ?degree . }
-  OPTIONAL { ?eduStatement pq:P580 ?eduStart . }
-  OPTIONAL { ?eduStatement pq:P582 ?eduEnd . }
-
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-ORDER BY DESC(?eduEnd) DESC(?eduStart)
-
-### Employment
-SELECT ?name ?employerLabel ?roleLabel ?empStart ?empEnd
-WHERE {
-  BIND(wd:Q20980928 AS ?researcher)
-  ?researcher rdfs:label ?name .
-  FILTER(LANG(?name) = "en")
-
-  ?researcher p:P108 ?empStatement .
-  ?empStatement ps:P108 ?employer .
-  OPTIONAL { ?empStatement pq:P39 ?role . }
-  OPTIONAL { ?empStatement pq:P580 ?empStart . }
-  OPTIONAL { ?empStatement pq:P582 ?empEnd . }
-
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-ORDER BY DESC(?empStart)
-
-### Awards and Grants
-SELECT ?name ?awardLabel ?awardDate
-WHERE {
-  BIND(wd:Q20980928 AS ?researcher)
-  ?researcher rdfs:label ?name .
-  FILTER(LANG(?name) = "en")
-
-  ?researcher p:P166 ?awardStatement .
-  ?awardStatement ps:P166 ?award .
-  OPTIONAL { ?awardStatement pq:P585 ?awardDate . }
-
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-ORDER BY DESC(?awardDate)
-
-
-### Supervision
-SELECT ?role ?personLabel 
-WHERE {
-  BIND(wd:Q20980928 AS ?researcher)
-  
-  {
-    ?researcher wdt:P185 ?person .
-    BIND("Supervised Student" AS ?role)
-  }
-  UNION
-  {
-    ?researcher wdt:P184 ?person .
-    BIND("Academic Advisor" AS ?role)
-  }
-
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-
-### Contributions to research community
