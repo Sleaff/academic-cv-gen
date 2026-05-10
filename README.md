@@ -87,18 +87,18 @@ Content Restriction: No links to external material.
   - No bibliometric indicators other than citations.
 
 #### Mandatory Content Sections
-Name
-Current Position(s)
-Previous Positions
-Education
-Career Breaks
-Research Statement
-Personal Context
-Grants and Awards
-Supervision, teaching and research leadership
-Collaborations and teamwork
-Contributions to the research community
-Contributions to the wider society
+- Name
+- Current Position(s)
+- Previous Positions
+- Education
+- Career Breaks
+- Research Statement
+- Personal Context
+- Grants and Awards
+- Supervision, teaching and research leadership
+- Collaborations and teamwork
+- Contributions to the research community
+- Contributions to the wider society
 
 ## Evaluation and Results
 #### Quantitative Evaluation
