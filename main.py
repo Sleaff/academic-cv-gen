@@ -18,8 +18,8 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
-USER_AGENT = "AcademicCVGenerator"
+WIKIDATA_SPARQL_URL = os.getenv("WIKIDATA_SPARQL_URL", "https://query.wikidata.org/sparql")
+USER_AGENT = os.getenv("USER_AGENT", "AcademicCVGenerator")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "campusai")
 
 if LLM_PROVIDER == "campusai":
@@ -49,6 +49,7 @@ class ChatMessage(BaseModel):
 
 
 def get_llm_client() -> openai.OpenAI:
+    """Initializes and returns an OpenAI client configured for the selected LLM provider."""
     return openai.OpenAI(
         api_key=LLM_API_KEY,
         base_url=LLM_BASE_URL,
@@ -56,6 +57,7 @@ def get_llm_client() -> openai.OpenAI:
 
 
 def call_llm(messages: list[ChatMessage]) -> str:
+    """Calls the configured LLM provider with the given messages and returns the response content."""
     client = get_llm_client()
 
     try:
@@ -84,6 +86,7 @@ def call_llm(messages: list[ChatMessage]) -> str:
 
 
 async def extract_text_from_pdf(file: UploadFile) -> str:
+    """Extracts text from an uploaded PDF file using Docling."""
     try:
         if not file.filename.endswith(".pdf"):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
@@ -115,7 +118,7 @@ def execute_sparql(query, max_retries=3):
     """Executes a SPARQL query against Wikidata with automatic retries."""
     headers = {
         "Accept": "application/json",
-        "User-Agent": "AcademicCVGenerator (s195171@student.dtu.dk)",
+        "User-Agent": USER_AGENT,
     }
 
     for attempt in range(max_retries):
@@ -145,6 +148,7 @@ def execute_sparql(query, max_retries=3):
 
 
 def format_for_llm(raw_sparql: dict) -> dict:
+    """Cleans and formats raw SPARQL results into a structured dictionary for that is more suitable for LLM input."""
     cleaned_data = {"name": raw_sparql.get("name", "Unknown")}
 
     for section, items in raw_sparql.items():
@@ -174,6 +178,7 @@ def format_for_llm(raw_sparql: dict) -> dict:
 
 
 def get_researcher_data(qid: str):
+    """Fetches and formats researcher data from Wikidata for a given QID."""
     queries = {
         "education": f"""
             SELECT ?name ?educationLabel ?degreeLabel ?eduStart ?eduEnd WHERE {{
@@ -271,12 +276,14 @@ def get_template_instructions(filepath: str) -> str:
 
 @app.post("/api/v1/research/{wikidata_qid}")
 def research(wikidata_qid: str):
+    '''Fetches and formats researcher data from Wikidata for a given QID.'''
     profile = get_researcher_data(wikidata_qid)
     return profile
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Simple health check endpoint."""
     return {"status": "ok"}
 
 
@@ -284,6 +291,7 @@ def health() -> dict[str, str]:
 async def generate_cv(
     wikidata_qid: str, format: str = "docx", previous_cv: UploadFile = File(None)
 ):
+    '''Generates a CV based on Wikidata profile and optional previous CV.'''
     if wikidata_qid == "Q20980928" and os.path.exists(
         "research_Q20980928_results.json"
     ):
@@ -427,7 +435,7 @@ async def generate_cv(
                 pdf.ln(5)
                 continue
 
-            # Check for header symbol
+            # Check if the line starts with a '#' to signify a header
             if line.startswith("#"):
                 clean_header = line.lstrip("#").strip()
                 safe_line = clean_header.encode("latin-1", "replace").decode("latin-1")
