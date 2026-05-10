@@ -20,7 +20,7 @@ The application follows a data processing pipeline:
 - NLP & LLM: Gemma4 accessed via the DTU CampusAI (or locally via LM Studio) for text generation.
 - Knowledge Graph: Wikidata as the primary data source, queried using SPARQL to retrieve researcher attributes.
 - Backend: FastAPI to handle data pipeline, llm orchistration, and file rendering.
-- Frontend: Simple streamlit user interface, where you can input QUID for Wikidata query, optional previous CV pdf, choose preferred file format and download the result.
+- Frontend: Simple streamlit user interface, where you can input QID for Wikidata query, optional previous CV pdf, choose preferred file format and download the result.
 - Environment: Docker for containerization to ensure the service can run anywhere.
 
 ## Dataset Description
